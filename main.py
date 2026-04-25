@@ -2,134 +2,233 @@ import requests
 import time
 import numpy as np
 import pandas as pd
+import mplfinance as mpf
+import json
+import os
 
 # ==============================
 # CONFIG
 # ==============================
 
-TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-CHAT_IDS = ["1068636754", "526074717"]
+TOKEN = "8428200035:AAGj0g0gMsk..."  # лучше потом перенести в Railway Variables
+CHAT_IDS = ["1068636754", 526074717]
 
-BASE = "https://www.okx.com"
+BASE = "https://fapi.binance.com"
 
 SCAN_INTERVAL = 60
-dynamic_threshold = 20
+dynamic_threshold = 65
 
-DEBUG = True
-HEARTBEAT_INTERVAL = 300
-
-last_heartbeat = 0
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
 
 # ==============================
 # TELEGRAM
 # ==============================
 
 def send(msg):
-    for chat_id in CHAT_IDS:
-        try:
+    try:
+        for chat_id in CHAT_IDS:
             requests.post(
                 f"https://api.telegram.org/bot{TOKEN}/sendMessage",
                 data={"chat_id": chat_id, "text": msg[:4000]},
                 timeout=10
             )
-        except Exception as e:
-            print("Telegram error:", e)
-
-# ==============================
-# SAFE REQUEST
-# ==============================
-
-def safe_get(url):
-    try:
-        r = requests.get(url, timeout=10)
-
-        if DEBUG:
-            print("GET:", r.url, "STATUS:", r.status_code)
-
-        data = r.json()
-
-        return data
-
     except Exception as e:
-        print("REQUEST ERROR:", e)
-        return None
+        print("Telegram send error:", e)
+
+
+def send_photo(path, caption=""):
+    try:
+        for chat_id in CHAT_IDS:
+            with open(path, "rb") as f:
+                requests.post(
+                    f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+                    data={"chat_id": chat_id, "caption": caption[:1000]},
+                    files={"photo": f},
+                    timeout=20
+                )
+    except Exception as e:
+        print("Telegram photo error:", e)
 
 # ==============================
-# OKX DATA
+# BINANCE SAFE REQUEST
 # ==============================
 
-def get_tickers():
-    url = BASE + "/api/v5/market/tickers?instType=SPOT"
-    data = safe_get(url)
+def safe_get(url, params=None):
+    for i in range(3):
+        try:
+            r = requests.get(
+                url,
+                params=params,
+                timeout=10,
+                headers=HEADERS
+            )
 
-    if not data:
-        return []
+            if r.status_code != 200:
+                print("HTTP ERROR:", r.status_code, r.text[:200])
+                time.sleep(2)
+                continue
 
-    if isinstance(data, dict) and "data" in data:
-        return data["data"]
+            try:
+                return r.json()
+            except Exception as e:
+                print("JSON ERROR:", e, r.text[:200])
+                time.sleep(2)
 
-    return []
+        except Exception as e:
+            print("REQUEST ERROR:", e)
+            time.sleep(2)
+
+    return None
+
+
+def get_24h():
+    data = safe_get(BASE + "/fapi/v1/ticker/24hr")
+    return data if isinstance(data, list) else []
+
+
+def get_klines(symbol):
+    data = safe_get(BASE + "/fapi/v1/klines",
+        {"symbol": symbol, "interval": "15m", "limit": 120})
+    return data if isinstance(data, list) else []
+
+# ==============================
+# ATR
+# ==============================
+
+def atr(kl):
+    highs = np.array([float(x[2]) for x in kl])
+    lows = np.array([float(x[3]) for x in kl])
+    closes = np.array([float(x[4]) for x in kl])
+
+    trs = []
+    for i in range(1, len(kl)):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i-1]),
+            abs(lows[i] - closes[i-1])
+        )
+        trs.append(tr)
+
+    return np.mean(trs[-14:]) if len(trs) > 14 else 0
 
 # ==============================
 # FEATURES
 # ==============================
 
-def features(t):
-    try:
-        change = float(t.get("24hChange", 0))
-        vol = float(t.get("volCcy24h", 0))
+def features(row, kl):
+    p = float(row["priceChangePercent"])
 
-        score = 0
+    closes = np.array([float(x[4]) for x in kl])
+    volumes = np.array([float(x[5]) for x in kl])
 
-        if change > 5:
-            score += 30
-        if change > 10:
-            score += 50
-        if vol > 1_000_000:
-            score += 10
+    vol_fade = volumes[-3:].mean() < volumes[-6:-3].mean() if len(volumes) > 6 else 0
+    breakout = closes[-1] < np.min(closes[-6:-1]) if len(closes) > 6 else 0
+    momentum = (closes[-1] - closes[-10]) / closes[-10] if len(closes) > 10 else 0
 
-        return change, vol, score
+    a = atr(kl)
+    regime = 1 if p > 20 and vol_fade else 0
 
-    except:
-        return 0, 0, 0
+    return p, vol_fade, breakout, momentum, a, regime
 
 # ==============================
 # ANALYZE
 # ==============================
 
-def analyze(t):
-    symbol = t.get("instId")
-
-    if not symbol:
+def analyze(row):
+    if not row:
         return None
 
-    change, vol, score = features(t)
+    symbol = row.get("symbol")
+    if not symbol or not symbol.endswith("USDT"):
+        return None
 
-    if DEBUG:
-        print(f"{symbol} | change={change} vol={vol} score={score}")
+    kl = get_klines(symbol)
+    if not kl or len(kl) < 80:
+        return None
+
+    p, vol_fade, breakout, momentum, a, regime = features(row, kl)
+
+    score = 0
+    if p > 20: score += 20
+    if vol_fade: score += 15
+    if breakout: score += 25
+    if momentum < 0: score += 10
+    if regime: score += 10
+
+    score = max(0, min(100, score))
 
     if score < dynamic_threshold:
         return None
 
+    price = float(kl[-1][4])
+
     return {
         "symbol": symbol,
         "score": score,
-        "change": change,
-        "vol": vol
+        "price": round(price, 6),
+        "kl": kl
     }
+
+# ==============================
+# CHART
+# ==============================
+
+def chart(symbol, kl):
+    try:
+        df = pd.DataFrame(kl, columns=[
+            "time","open","high","low","close","volume",
+            "x1","x2","x3","x4","x5","x6"
+        ])
+
+        df = df[["time","open","high","low","close","volume"]]
+        df.columns = ["Date","Open","High","Low","Close","Volume"]
+        df["Date"] = pd.to_datetime(df["Date"], unit="ms")
+        df.set_index("Date", inplace=True)
+
+        for c in df.columns:
+            df[c] = df[c].astype(float)
+
+        file_path = f"chart_{symbol}.png"
+
+        mpf.plot(
+            df,
+            type="candle",
+            volume=True,
+            style="charles",
+            figsize=(12, 8),
+            tight_layout=True,
+            savefig=dict(fname=file_path, dpi=150, bbox_inches="tight")
+        )
+
+        return file_path
+
+    except Exception as e:
+        print("Chart error:", e)
+        return None
 
 # ==============================
 # MESSAGE
 # ==============================
 
-def build_msg(s):
-    return f"""
-📡 SIGNAL
-{ s['symbol'] }
+def build_message(s):
+    if s["score"] >= 85:
+        status = "🟢 ЭЛИТНЫЙ"
+    elif s["score"] >= 75:
+        status = "🔥 СИЛЬНЫЙ"
+    else:
+        status = "👀 WATCH"
 
-Score: {s['score']}
-Change: {s['change']}
-Volume: {s['vol']}
+    return f"""
+━━━━━━━━━━━━━━
+📉 SHORT SIGNAL
+{status}
+━━━━━━━━━━━━━━
+🪙 {s['symbol']}
+🎯 SCORE: {s['score']}
+💰 PRICE: {s['price']}
+━━━━━━━━━━━━━━
 """
 
 # ==============================
@@ -137,58 +236,38 @@ Volume: {s['vol']}
 # ==============================
 
 def main():
-    global last_heartbeat
+    send("🚀 BOT STARTED SUCCESSFULLY")
 
-    send("🚀 DIAGNOSTIC BOT STARTED")
-
-    iteration = 0
+    test = get_24h()
+    print("TEST 24H TYPE:", type(test), "LEN:", len(test) if test else None)
 
     while True:
-        iteration += 1
-
         try:
-            print(f"\n--- LOOP {iteration} ---")
-
-            data = get_tickers()
+            data = get_24h()
 
             if not data:
-                send("⚠️ NO DATA FROM OKX")
+                print("No market data received")
                 time.sleep(10)
                 continue
 
-            checked = 0
-            signals = 0
+            for row in data:
+                s = analyze(row)
 
-            for t in data:
-                checked += 1
+                if s:
+                    file = chart(s["symbol"], s["kl"])
+                    msg = build_message(s)
 
-                try:
-                    s = analyze(t)
-
-                    if s:
-                        signals += 1
-                        send(build_msg(s))
-
-                except Exception as e:
-                    print("Analyze error:", e)
-
-            print(f"Checked={checked} Signals={signals}")
-
-            # heartbeat
-            if time.time() - last_heartbeat > HEARTBEAT_INTERVAL:
-                send(f"🟢 BOT ALIVE | checked={checked} signals={signals}")
-                last_heartbeat = time.time()
+                    if file:
+                        send_photo(file, msg)
+                    else:
+                        send(msg)
 
             time.sleep(SCAN_INTERVAL)
 
         except Exception as e:
-            send(f"❌ CRASH: {str(e)}")
-            print("CRASH:", e)
+            print("MAIN LOOP ERROR:", e)
+            send(f"ERROR: {str(e)}")
             time.sleep(10)
-
-# ==============================
-# START
-# ==============================
 
 if __name__ == "__main__":
     main()
