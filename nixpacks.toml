@@ -1,8 +1,19 @@
 [phases.setup]
-nixPkgs = ["python311Full", "python311Packages.pip"]
+nixPkgs = [
+  "python311Full",
+  "gcc",
+  "pkg-config",
+  "freetype",
+  "libpng"
+]
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = [
+  "python -m venv /opt/venv",
+  ". /opt/venv/bin/activate",
+  "pip install --upgrade pip",
+  "pip install -r requirements.txt"
+]
 
 [phases.start]
-cmd = "python main.py"
+cmd = ". /opt/venv/bin/activate && python main.py"
