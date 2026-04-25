@@ -1,8 +1,5 @@
 import requests
 import time
-import numpy as np
-import pandas as pd
-import mplfinance as mpf
 
 # ==============================
 # CONFIG
@@ -17,7 +14,7 @@ SCAN_INTERVAL = 60
 dynamic_threshold = 65
 
 # ==============================
-# TELEGRAM
+# TELEGRAM SAFE
 # ==============================
 
 def send(msg):
@@ -28,25 +25,11 @@ def send(msg):
                 data={"chat_id": chat_id, "text": msg[:4000]},
                 timeout=10
             )
-    except:
-        pass
-
-
-def send_photo(path, caption=""):
-    try:
-        for chat_id in CHAT_IDS:
-            with open(path, "rb") as f:
-                requests.post(
-                    f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-                    data={"chat_id": chat_id, "caption": caption[:1000]},
-                    files={"photo": f},
-                    timeout=20
-                )
-    except:
-        pass
+    except Exception as e:
+        print("TELEGRAM ERROR:", e)
 
 # ==============================
-# SAFE GET (IMPORTANT FIX)
+# SAFE REQUEST
 # ==============================
 
 def safe_get(url, params=None):
@@ -61,156 +44,113 @@ def safe_get(url, params=None):
             print("HTTP ERROR:", r.status_code, r.text[:200])
             return None
 
-        data = r.json()
-
-        return data
+        try:
+            return r.json()
+        except:
+            print("JSON PARSE ERROR:", r.text[:200])
+            return None
 
     except Exception as e:
         print("REQUEST ERROR:", e)
         return None
 
 # ==============================
-# MEXC DATA
+# MARKET DATA
 # ==============================
 
 def get_24h():
     data = safe_get(BASE + "/api/v3/ticker/24hr")
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        return []
+    return data
 
 
 def get_klines(symbol):
     data = safe_get(BASE + "/api/v3/klines", {
         "symbol": symbol,
         "interval": "15m",
-        "limit": 120
+        "limit": 100
     })
 
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        return []
+
+    return data
 
 # ==============================
-# ATR
-# ==============================
-
-def atr(kl):
-    if len(kl) < 20:
-        return 0
-
-    highs = np.array([float(x[2]) for x in kl])
-    lows = np.array([float(x[3]) for x in kl])
-    closes = np.array([float(x[4]) for x in kl])
-
-    trs = []
-    for i in range(1, len(kl)):
-        tr = max(
-            highs[i] - lows[i],
-            abs(highs[i] - closes[i-1]),
-            abs(lows[i] - closes[i-1])
-        )
-        trs.append(tr)
-
-    return np.mean(trs[-14:]) if len(trs) > 14 else 0
-
-# ==============================
-# FEATURES
-# ==============================
-
-def features(row, kl):
-    p = float(row.get("priceChangePercent", 0))
-
-    closes = np.array([float(x[4]) for x in kl])
-    volumes = np.array([float(x[5]) for x in kl])
-
-    vol_fade = False
-    if len(volumes) > 10:
-        vol_fade = volumes[-3:].mean() < volumes[-6:-3].mean()
-
-    breakout = False
-    if len(closes) > 10:
-        breakout = closes[-1] < np.min(closes[-6:-1])
-
-    momentum = 0
-    if len(closes) > 10:
-        momentum = (closes[-1] - closes[-10]) / closes[-10]
-
-    a = atr(kl)
-    regime = 1 if p > 2 and vol_fade else 0
-
-    return p, vol_fade, breakout, momentum, a, regime
-
-# ==============================
-# ANALYZE
+# FEATURE ENGINE (NO CRASH VERSION)
 # ==============================
 
 def analyze(row):
-    symbol = row.get("symbol")
-
-    if not symbol or not symbol.endswith("USDT"):
-        return None
-
-    kl = get_klines(symbol)
-
-    if len(kl) < 50:
-        return None
-
-    p, vol_fade, breakout, momentum, a, regime = features(row, kl)
-
-    score = 0
-    if p > 2: score += 20
-    if vol_fade: score += 15
-    if breakout: score += 25
-    if momentum < 0: score += 10
-    if regime: score += 10
-
-    score = max(0, min(100, score))
-
-    if score < dynamic_threshold:
-        return None
-
-    price = float(kl[-1][4])
-
-    return {
-        "symbol": symbol,
-        "score": score,
-        "price": round(price, 6),
-        "kl": kl
-    }
-
-# ==============================
-# CHART
-# ==============================
-
-def chart(symbol, kl):
     try:
-        df = pd.DataFrame(kl, columns=[
-            "time","open","high","low","close","volume","extra1","extra2"
-        ])
+        symbol = row.get("symbol")
+        if not symbol or not symbol.endswith("USDT"):
+            return None
 
-        df = df[["time","open","high","low","close","volume"]]
-        df.columns = ["Date","Open","High","Low","Close","Volume"]
+        price_change = float(row.get("priceChangePercent", 0))
 
-        df["Date"] = pd.to_numeric(df["Date"], errors="coerce")
-        df["Date"] = pd.to_datetime(df["Date"], unit="ms")
+        kl = get_klines(symbol)
+        if len(kl) < 50:
+            return None
 
-        df.set_index("Date", inplace=True)
+        closes = []
+        volumes = []
 
-        df = df.astype(float)
+        for k in kl:
+            try:
+                closes.append(float(k[4]))
+                volumes.append(float(k[5]))
+            except:
+                continue
 
-        file_path = f"chart_{symbol}.png"
+        if len(closes) < 20:
+            return None
 
-        mpf.plot(
-            df,
-            type="candle",
-            volume=True,
-            style="charles",
-            figsize=(12, 8),
-            tight_layout=True,
-            savefig=dict(fname=file_path, dpi=150, bbox_inches="tight")
-        )
+        # ======================
+        # FEATURES
+        # ======================
 
-        return file_path
+        vol_fade = False
+        if len(volumes) > 10:
+            vol_fade = sum(volumes[-3:]) < sum(volumes[-6:-3])
+
+        breakout = closes[-1] < min(closes[-6:-1])
+
+        momentum = 0
+        if len(closes) > 10:
+            momentum = (closes[-1] - closes[-10]) / closes[-10]
+
+        regime = price_change > 2 and vol_fade
+
+        # ======================
+        # SCORE
+        # ======================
+
+        score = 0
+        if price_change > 2:
+            score += 20
+        if vol_fade:
+            score += 15
+        if breakout:
+            score += 25
+        if momentum < 0:
+            score += 10
+        if regime:
+            score += 10
+
+        score = max(0, min(100, score))
+
+        if score < dynamic_threshold:
+            return None
+
+        return {
+            "symbol": symbol,
+            "score": score,
+            "price": closes[-1]
+        }
 
     except Exception as e:
-        print("CHART ERROR:", e)
+        print("ANALYZE ERROR:", e)
         return None
 
 # ==============================
@@ -219,55 +159,52 @@ def chart(symbol, kl):
 
 def build_message(s):
     if s["score"] >= 85:
-        status = "🟢 ЭЛИТНЫЙ"
+        status = "🟢 ELITE"
     elif s["score"] >= 75:
-        status = "🔥 СИЛЬНЫЙ"
+        status = "🔥 STRONG"
     else:
         status = "👀 WATCH"
 
-    return f"""
-━━━━━━━━━━━━━━
-📉 SIGNAL
-{status}
-━━━━━━━━━━━━━━
-🪙 {s['symbol']}
-🎯 SCORE: {s['score']}
-💰 PRICE: {s['price']}
-━━━━━━━━━━━━━━
-"""
+    return (
+        "━━━━━━━━━━━━━━\n"
+        "📉 SIGNAL\n"
+        f"{status}\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🪙 {s['symbol']}\n"
+        f"🎯 SCORE: {s['score']}\n"
+        f"💰 PRICE: {s['price']}\n"
+        "━━━━━━━━━━━━━━"
+    )
 
 # ==============================
-# MAIN LOOP
+# MAIN LOOP (RAILWAY SAFE)
 # ==============================
 
 def main():
-    send("🚀 BOT STARTED (MEXC STABLE)")
+    print("BOT STARTED")
+    send("🚀 BOT STARTED (SAFE MODE)")
 
     while True:
         try:
             data = get_24h()
 
             if not data:
-                print("No market data")
+                print("NO MARKET DATA")
                 time.sleep(10)
                 continue
 
             for row in data:
-                s = analyze(row)
+                signal = analyze(row)
 
-                if s:
-                    file = chart(s["symbol"], s["kl"])
-                    msg = build_message(s)
-
-                    if file:
-                        send_photo(file, msg)
-                    else:
-                        send(msg)
+                if signal:
+                    msg = build_message(signal)
+                    print("SIGNAL:", signal["symbol"], signal["score"])
+                    send(msg)
 
             time.sleep(SCAN_INTERVAL)
 
         except Exception as e:
-            print("MAIN ERROR:", e)
+            print("MAIN LOOP ERROR:", e)
             send(f"ERROR: {str(e)}")
             time.sleep(10)
 
