@@ -10,7 +10,7 @@ import os
 # CONFIG
 # ==============================
 
-TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # лучше потом перенести в Railway Variables
+TOKEN = "8428200035:AAGj0kOGsbwC_MNtN1Hd1b_mbUpoAXx-MgM"  # лучше потом перенести в Railway Variables
 CHAT_IDS = ["1068636754", 526074717]
 
 BASE = "https://fapi.binance.com"
