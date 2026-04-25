@@ -12,7 +12,7 @@ import os
 TOKEN = "8428200035:AAGj0kOGsbwC_MNtN1Hd1b_mbUpoAXx-MgM"
 CHAT_IDS = ["1068636754", "526074717"]
 
-BASE = "https://fapi.binance.com"
+BASE = "https://fstream.binance.com"
 
 SCAN_INTERVAL = 60
 dynamic_threshold = 20
