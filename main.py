@@ -8,10 +8,10 @@ import mplfinance as mpf
 # CONFIG
 # ==============================
 
-TOKEN = "YOUR_TOKEN"
+TOKEN = "8428200035:AAGj0kOGsbwC_MNtN1Hd1b_mbUpoAXx-MgM"
 CHAT_IDS = ["1068636754", 526074717]
 
-BASE = "https://api.bybit.com"
+BASE = "https://api.mexc.com"
 
 SCAN_INTERVAL = 60
 dynamic_threshold = 65
@@ -46,21 +46,22 @@ def send_photo(path, caption=""):
         pass
 
 # ==============================
-# SAFE GET (STABLE)
+# SAFE GET (IMPORTANT FIX)
 # ==============================
 
 def safe_get(url, params=None):
     try:
-        r = requests.get(url, params=params, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+
+        r = requests.get(url, params=params, headers=headers, timeout=10)
 
         if r.status_code != 200:
-            print("HTTP ERROR:", r.status_code)
+            print("HTTP ERROR:", r.status_code, r.text[:200])
             return None
 
         data = r.json()
-
-        if isinstance(data, dict) and data.get("retCode", 0) != 0:
-            return None
 
         return data
 
@@ -69,35 +70,22 @@ def safe_get(url, params=None):
         return None
 
 # ==============================
-# BYBIT DATA
+# MEXC DATA
 # ==============================
 
 def get_24h():
-    data = safe_get(BASE + "/v5/market/tickers", {
-        "category": "linear"
-    })
-
-    if not data:
-        return []
-
-    return data.get("result", {}).get("list", [])
+    data = safe_get(BASE + "/api/v3/ticker/24hr")
+    return data if isinstance(data, list) else []
 
 
 def get_klines(symbol):
-    data = safe_get(BASE + "/v5/market/kline", {
-        "category": "linear",
+    data = safe_get(BASE + "/api/v3/klines", {
         "symbol": symbol,
-        "interval": "15",
+        "interval": "15m",
         "limit": 120
     })
 
-    if not data:
-        return []
-
-    kl = data.get("result", {}).get("list", [])
-
-    # 🔥 FIX: ensure chronological order (old → new)
-    return list(reversed(kl))
+    return data if isinstance(data, list) else []
 
 # ==============================
 # ATR
@@ -127,7 +115,7 @@ def atr(kl):
 # ==============================
 
 def features(row, kl):
-    p = float(row.get("price24hPcnt", 0))
+    p = float(row.get("priceChangePercent", 0))
 
     closes = np.array([float(x[4]) for x in kl])
     volumes = np.array([float(x[5]) for x in kl])
@@ -145,7 +133,7 @@ def features(row, kl):
         momentum = (closes[-1] - closes[-10]) / closes[-10]
 
     a = atr(kl)
-    regime = 1 if p > 0.02 and vol_fade else 0
+    regime = 1 if p > 2 and vol_fade else 0
 
     return p, vol_fade, breakout, momentum, a, regime
 
@@ -155,17 +143,19 @@ def features(row, kl):
 
 def analyze(row):
     symbol = row.get("symbol")
-    if not symbol:
+
+    if not symbol or not symbol.endswith("USDT"):
         return None
 
     kl = get_klines(symbol)
-    if len(kl) < 80:
+
+    if len(kl) < 50:
         return None
 
     p, vol_fade, breakout, momentum, a, regime = features(row, kl)
 
     score = 0
-    if p > 0.02: score += 20
+    if p > 2: score += 20
     if vol_fade: score += 15
     if breakout: score += 25
     if momentum < 0: score += 10
@@ -186,19 +176,21 @@ def analyze(row):
     }
 
 # ==============================
-# CHART (SAFE)
+# CHART
 # ==============================
 
 def chart(symbol, kl):
     try:
         df = pd.DataFrame(kl, columns=[
-            "time","open","high","low","close","volume","turnover"
+            "time","open","high","low","close","volume","extra1","extra2"
         ])
 
         df = df[["time","open","high","low","close","volume"]]
         df.columns = ["Date","Open","High","Low","Close","Volume"]
 
-        df["Date"] = pd.to_datetime(df["Date"].astype(float), unit="ms")
+        df["Date"] = pd.to_numeric(df["Date"], errors="coerce")
+        df["Date"] = pd.to_datetime(df["Date"], unit="ms")
+
         df.set_index("Date", inplace=True)
 
         df = df.astype(float)
@@ -245,17 +237,18 @@ def build_message(s):
 """
 
 # ==============================
-# MAIN
+# MAIN LOOP
 # ==============================
 
 def main():
-    send("🚀 BOT STARTED (BYBIT STABLE VERSION)")
+    send("🚀 BOT STARTED (MEXC STABLE)")
 
     while True:
         try:
             data = get_24h()
 
             if not data:
+                print("No market data")
                 time.sleep(10)
                 continue
 
