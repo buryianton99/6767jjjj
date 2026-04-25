@@ -8,7 +8,7 @@ import mplfinance as mpf
 # CONFIG
 # ==============================
 
-TOKEN = "8428200035:AAGj0g0gMsk..."
+TOKEN = "8428200035:AAGj0kOGsbwC_MNtN1Hd1b_mbUpoAXx-MgM" 
 CHAT_IDS = ["1068636754", 526074717]
 
 BASE = "https://api.bydfi.com"
