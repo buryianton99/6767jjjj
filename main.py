@@ -16,7 +16,7 @@ CHAT_IDS = ["1068636754", 526074717]
 BASE = "https://fapi.binance.com"
 
 SCAN_INTERVAL = 60
-dynamic_threshold = 65
+dynamic_threshold = 20
 
 # ==============================
 # TELEGRAM
