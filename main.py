@@ -3,17 +3,15 @@ import time
 import numpy as np
 import pandas as pd
 import mplfinance as mpf
-import json
-import os
 
 # ==============================
 # CONFIG
 # ==============================
 
-TOKEN = "8428200035:AAGj0kOGsbwC_MNtN1Hd1b_mbUpoAXx-MgM"
+TOKEN = "8428200035:AAGj0g0gMsk..."
 CHAT_IDS = ["1068636754", 526074717]
 
-BASE = "https://api.bybit.com"
+BASE = "https://api.bydfi.com"
 
 SCAN_INTERVAL = 60
 dynamic_threshold = 65
@@ -52,7 +50,7 @@ def send_photo(path, caption=""):
         print("Telegram photo error:", e)
 
 # ==============================
-# BYBIT API (REPLACED PART)
+# BYDFi API SAFE GET
 # ==============================
 
 def safe_get(url, params=None):
@@ -73,26 +71,26 @@ def safe_get(url, params=None):
 
     return None
 
+# ==============================
+# MARKET DATA (BYDFi)
+# ==============================
 
 def get_24h():
-    data = safe_get(BASE + "/v5/market/tickers", {
-        "category": "linear"
-    })
+    data = safe_get(BASE + "/v1/market/tickers")
 
     if not data:
         return []
 
     try:
-        return data["result"]["list"]
+        return data["data"]
     except:
         return []
 
 
 def get_klines(symbol):
-    data = safe_get(BASE + "/v5/market/kline", {
-        "category": "linear",
+    data = safe_get(BASE + "/v1/market/kline", {
         "symbol": symbol,
-        "interval": "15",
+        "interval": "15m",
         "limit": 120
     })
 
@@ -100,7 +98,7 @@ def get_klines(symbol):
         return []
 
     try:
-        return data["result"]["list"]
+        return data["data"]
     except:
         return []
 
@@ -129,7 +127,7 @@ def atr(kl):
 # ==============================
 
 def features(row, kl):
-    p = float(row.get("price24hPcnt", 0))
+    p = float(row.get("priceChangePercent", 0))
 
     closes = np.array([float(x[4]) for x in kl])
     volumes = np.array([float(x[5]) for x in kl])
@@ -150,7 +148,7 @@ def features(row, kl):
 def analyze(row):
     symbol = row.get("symbol")
 
-    if not symbol or not symbol.endswith("USDT"):
+    if not symbol:
         return None
 
     kl = get_klines(symbol)
@@ -243,7 +241,7 @@ def build_message(s):
 # ==============================
 
 def main():
-    send("🚀 BOT STARTED SUCCESSFULLY")
+    send("🚀 BOT STARTED SUCCESSFULLY (BYDFi)")
 
     while True:
         try:
