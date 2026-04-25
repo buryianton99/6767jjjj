@@ -10,10 +10,10 @@ import os
 # CONFIG
 # ==============================
 
-TOKEN = "8428200035:AAGj0g0gMsk..."  # лучше потом перенести в Railway Variables
+TOKEN = "8428200035:AAGj0kOGsbwC_MNtN1Hd1b_mbUpoAXx-MgM"
 CHAT_IDS = ["1068636754", 526074717]
 
-BASE = "https://fapi.binance.com"
+BASE = "https://api.bybit.com"
 
 SCAN_INTERVAL = 60
 dynamic_threshold = 65
@@ -35,7 +35,7 @@ def send(msg):
                 timeout=10
             )
     except Exception as e:
-        print("Telegram send error:", e)
+        print("Telegram error:", e)
 
 
 def send_photo(path, caption=""):
@@ -52,29 +52,20 @@ def send_photo(path, caption=""):
         print("Telegram photo error:", e)
 
 # ==============================
-# BINANCE SAFE REQUEST
+# BYBIT API (REPLACED PART)
 # ==============================
 
 def safe_get(url, params=None):
     for i in range(3):
         try:
-            r = requests.get(
-                url,
-                params=params,
-                timeout=10,
-                headers=HEADERS
-            )
+            r = requests.get(url, params=params, timeout=10, headers=HEADERS)
 
             if r.status_code != 200:
                 print("HTTP ERROR:", r.status_code, r.text[:200])
                 time.sleep(2)
                 continue
 
-            try:
-                return r.json()
-            except Exception as e:
-                print("JSON ERROR:", e, r.text[:200])
-                time.sleep(2)
+            return r.json()
 
         except Exception as e:
             print("REQUEST ERROR:", e)
@@ -84,14 +75,34 @@ def safe_get(url, params=None):
 
 
 def get_24h():
-    data = safe_get(BASE + "/fapi/v1/ticker/24hr")
-    return data if isinstance(data, list) else []
+    data = safe_get(BASE + "/v5/market/tickers", {
+        "category": "linear"
+    })
+
+    if not data:
+        return []
+
+    try:
+        return data["result"]["list"]
+    except:
+        return []
 
 
 def get_klines(symbol):
-    data = safe_get(BASE + "/fapi/v1/klines",
-        {"symbol": symbol, "interval": "15m", "limit": 120})
-    return data if isinstance(data, list) else []
+    data = safe_get(BASE + "/v5/market/kline", {
+        "category": "linear",
+        "symbol": symbol,
+        "interval": "15",
+        "limit": 120
+    })
+
+    if not data:
+        return []
+
+    try:
+        return data["result"]["list"]
+    except:
+        return []
 
 # ==============================
 # ATR
@@ -118,7 +129,7 @@ def atr(kl):
 # ==============================
 
 def features(row, kl):
-    p = float(row["priceChangePercent"])
+    p = float(row.get("price24hPcnt", 0))
 
     closes = np.array([float(x[4]) for x in kl])
     volumes = np.array([float(x[5]) for x in kl])
@@ -137,10 +148,8 @@ def features(row, kl):
 # ==============================
 
 def analyze(row):
-    if not row:
-        return None
-
     symbol = row.get("symbol")
+
     if not symbol or not symbol.endswith("USDT"):
         return None
 
@@ -178,11 +187,9 @@ def analyze(row):
 def chart(symbol, kl):
     try:
         df = pd.DataFrame(kl, columns=[
-            "time","open","high","low","close","volume",
-            "x1","x2","x3","x4","x5","x6"
+            "time","open","high","low","close","volume"
         ])
 
-        df = df[["time","open","high","low","close","volume"]]
         df.columns = ["Date","Open","High","Low","Close","Volume"]
         df["Date"] = pd.to_datetime(df["Date"], unit="ms")
         df.set_index("Date", inplace=True)
@@ -238,15 +245,12 @@ def build_message(s):
 def main():
     send("🚀 BOT STARTED SUCCESSFULLY")
 
-    test = get_24h()
-    print("TEST 24H TYPE:", type(test), "LEN:", len(test) if test else None)
-
     while True:
         try:
             data = get_24h()
 
             if not data:
-                print("No market data received")
+                print("No market data")
                 time.sleep(10)
                 continue
 
@@ -265,7 +269,7 @@ def main():
             time.sleep(SCAN_INTERVAL)
 
         except Exception as e:
-            print("MAIN LOOP ERROR:", e)
+            print("MAIN ERROR:", e)
             send(f"ERROR: {str(e)}")
             time.sleep(10)
 
