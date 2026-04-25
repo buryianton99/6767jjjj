@@ -11,7 +11,7 @@ from datetime import datetime
 # CONFIG
 # ==============================
 TOKEN = "8428200035:AAGj0kOGsbwC_MNtN1Hd1b_mbUpoAXx-MgM"
-CHAT_ID = "1068636754"
+CHAT_IDS = ["1068636754", 526074717]
 
 BASE = "https://fapi.binance.com"
 
@@ -42,11 +42,10 @@ last_update_id = 0
 # TELEGRAM
 # ==============================
 def send(msg):
-    try:
+    for chat_id in CHAT_IDS:
         requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": msg[:4000]},
-            timeout=10
+            data={"chat_id": chat_id, "text": msg[:4000]}
         )
     except:
         pass
