@@ -8,47 +8,50 @@ import mplfinance as mpf
 # CONFIG
 # ==============================
 
-TOKEN = "8428200035:AAGj0kOGsbwC_MNtN1Hd1b_mbUpoAXx-MgM"
+TOKEN = "YOUR_TOKEN"
 CHAT_IDS = ["1068636754", "526074717"]
 
-BASE = "https://www.okx.com"
+BASE = "https://api.okx.com"  # OKX public API (spot market)
 
 SCAN_INTERVAL = 60
 dynamic_threshold = 20
 
-DEBUG = True  # 🔥 ВКЛЮЧЕН ДИАГНОСТИЧЕСКИЙ РЕЖИМ
+DEBUG = True
+HEARTBEAT_INTERVAL = 300  # 5 min
+
+last_heartbeat = 0
 
 # ==============================
 # TELEGRAM
 # ==============================
 
 def send(msg):
-    try:
-        for chat_id in CHAT_IDS:
+    for chat_id in CHAT_IDS:
+        try:
             requests.post(
                 f"https://api.telegram.org/bot{TOKEN}/sendMessage",
                 data={"chat_id": chat_id, "text": msg[:4000]},
                 timeout=10
             )
-    except:
-        pass
+        except Exception as e:
+            print("Telegram error:", e)
 
 # ==============================
-# SAFE REQUEST
+# SAFE REQUEST (VERY IMPORTANT)
 # ==============================
 
 def safe_get(url, params=None):
     try:
         r = requests.get(url, params=params, timeout=10)
 
-        if r.status_code != 200:
-            print("HTTP ERROR:", r.status_code)
-            return None
+        if DEBUG:
+            print("API URL:", r.url)
+            print("STATUS:", r.status_code)
 
-        data = r.json()
-
-        if isinstance(data, dict) and data.get("code"):
-            print("API ERROR:", data)
+        try:
+            data = r.json()
+        except:
+            print("NON-JSON RESPONSE:", r.text[:300])
             return None
 
         return data
@@ -58,200 +61,124 @@ def safe_get(url, params=None):
         return None
 
 # ==============================
-# OKX DATA
+# OKX MARKET DATA
 # ==============================
 
-def get_24h():
-    url = BASE + "/api/v5/market/tickers?instType=SWAP"
-    data = safe_get(url)
+def get_tickers():
+    # OKX spot tickers
+    data = safe_get(BASE + "/api/v5/market/tickers?instType=SPOT")
 
-    if not data or "data" not in data:
-        print("❌ NO TICKERS")
+    if not data:
         return []
 
-    result = []
+    # OKX returns: {"data":[...]}
+    if isinstance(data, dict) and "data" in data:
+        return data["data"]
 
-    for item in data["data"]:
-        try:
-            symbol = item["instId"].replace("-SWAP", "").replace("-", "")
-
-            # ⚠️ псевдо change (пока упрощённо)
-            result.append({
-                "symbol": symbol,
-                "priceChangePercent": float(item.get("open24h", 0))
-            })
-        except:
-            continue
-
-    print(f"✅ TICKERS LOADED: {len(result)}")
-    return result
-
-def get_klines(symbol):
-    inst = symbol.replace("USDT", "-USDT-SWAP")
-
-    url = BASE + "/api/v5/market/candles"
-    params = {"instId": inst, "bar": "15m", "limit": 120}
-
-    data = safe_get(url, params)
-
-    if not data or "data" not in data:
-        return []
-
-    kl = []
-    for c in data["data"]:
-        try:
-            kl.append([
-                int(c[0]),
-                c[1], c[2], c[3], c[4], c[5]
-            ])
-        except:
-            continue
-
-    return kl[::-1]
+    return []
 
 # ==============================
-# ATR
+# FEATURES (simplified but stable)
 # ==============================
 
-def atr(kl):
-    if len(kl) < 20:
-        return 0
+def features(t):
+    try:
+        change = float(t.get("24hChange", 0))
+        vol = float(t.get("volCcy24h", 0))
 
-    highs = np.array([float(x[2]) for x in kl])
-    lows = np.array([float(x[3]) for x in kl])
-    closes = np.array([float(x[4]) for x in kl])
+        score = 0
+        if change > 5:
+            score += 30
+        if change > 10:
+            score += 50
+        if vol > 1_000_000:
+            score += 10
 
-    trs = []
-    for i in range(1, len(kl)):
-        tr = max(
-            highs[i] - lows[i],
-            abs(highs[i] - closes[i-1]),
-            abs(lows[i] - closes[i-1])
-        )
-        trs.append(tr)
+        return change, vol, score
 
-    return np.mean(trs[-14:]) if trs else 0
-
-# ==============================
-# FEATURES
-# ==============================
-
-def features(row, kl):
-    p = float(row["priceChangePercent"])
-
-    closes = np.array([float(x[4]) for x in kl])
-    volumes = np.array([float(x[5]) for x in kl])
-
-    vol_fade = volumes[-3:].mean() < volumes[-6:-3].mean() if len(volumes) > 6 else False
-    breakout = closes[-1] < np.min(closes[-6:-1]) if len(closes) > 6 else False
-    momentum = (closes[-1] - closes[-10]) / closes[-10] if len(closes) > 10 else 0
-
-    a = atr(kl)
-    regime = 1 if p > 20 and vol_fade else 0
-
-    return p, vol_fade, breakout, momentum, a, regime
+    except:
+        return 0, 0, 0
 
 # ==============================
-# ANALYZE (DIAGNOSTIC VERSION)
+# ANALYZE
 # ==============================
 
-def analyze(row):
-    symbol = row["symbol"]
+def analyze(t):
+    symbol = t.get("instId")
 
-    if not symbol.endswith("USDT"):
+    if not symbol:
         return None
 
-    kl = get_klines(symbol)
-
-    if len(kl) < 80:
-        if DEBUG:
-            print(f"SKIP {symbol} - not enough klines")
-        return None
-
-    p, vol_fade, breakout, momentum, a, regime = features(row, kl)
-
-    score = 0
-
-    if p > 20:
-        score += 20
-    if vol_fade:
-        score += 15
-    if breakout:
-        score += 25
-    if momentum < 0:
-        score += 10
-    if regime:
-        score += 10
-
-    score = max(0, min(100, score))
+    change, vol, score = features(t)
 
     if DEBUG:
-        print(f"{symbol} | score={score} | p={p:.2f} | vol={vol_fade} | brk={breakout}")
+        print(f"{symbol} change={change} vol={vol} score={score}")
 
-    # 🔥 В ДИАГНОСТИКЕ НЕ РЕЖЕМ СИГНАЛЫ ЖЁСТКО
     if score < dynamic_threshold:
-        return {
-            "symbol": symbol,
-            "score": score,
-            "price": float(kl[-1][4]),
-            "kl": kl,
-            "debug": True
-        }
+        return None
 
     return {
         "symbol": symbol,
         "score": score,
-        "price": float(kl[-1][4]),
-        "kl": kl,
-        "debug": False
+        "change": change,
+        "vol": vol
     }
+
+# ==============================
+# MESSAGE
+# ==============================
+
+def msg(s):
+    return f"""
+📡 SIGNAL
+{ s['symbol'] }
+Score: {s['score']}
+Change: {s['change']}
+Volume: {s['vol']}
+"""
 
 # ==============================
 # MAIN
 # ==============================
 
 def main():
-    send("🚀 DIAGNOSTIC BOT STARTED")
+    global last_heartbeat
 
-    heartbeat = 0
+    send("🚀 DIAGNOSTIC BOT STARTED")
 
     while True:
         try:
-            data = get_24h()
+            tickers = get_tickers()
 
-            if not data:
-                print("NO DATA FROM OKX")
+            if not tickers:
+                send("⚠️ NO DATA FROM OKX API")
                 time.sleep(10)
                 continue
 
-            print(f"SCANNING {len(data)} symbols...")
+            checked = 0
+            signals = 0
 
-            hits = 0
-            seen = 0
+            for t in tickers:
+                checked += 1
+                s = analyze(t)
 
-            for row in data:
-                seen += 1
-                s = analyze(row)
+                if s:
+                    signals += 1
+                    send(msg(s))
 
-                if not s:
-                    continue
+            if DEBUG:
+                print(f"Checked: {checked}, Signals: {signals}")
 
-                if s["score"] >= dynamic_threshold:
-                    hits += 1
-                    send(f"🔥 SIGNAL {s['symbol']} | score {s['score']} | price {s['price']}")
-                else:
-                    if DEBUG and seen % 50 == 0:
-                        send(f"DEBUG: {seen} scanned, {hits} signals so far")
-
-            heartbeat += 1
-            if heartbeat % 10 == 0:
-                send("💓 BOT ALIVE (diagnostic heartbeat)")
+            # heartbeat
+            if time.time() - last_heartbeat > HEARTBEAT_INTERVAL:
+                send(f"🟢 BOT ALIVE | checked={checked} signals={signals}")
+                last_heartbeat = time.time()
 
             time.sleep(SCAN_INTERVAL)
 
         except Exception as e:
-            print("ERROR:", e)
-            send(f"ERROR: {str(e)}")
+            send(f"❌ ERROR: {str(e)}")
+            print("CRASH:", e)
             time.sleep(10)
 
 if __name__ == "__main__":
