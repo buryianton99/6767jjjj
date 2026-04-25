@@ -2,7 +2,7 @@
 nixPkgs = ["python311Full"]
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = ["python -m pip install -r requirements.txt"]
 
 [phases.start]
 cmd = "python main.py"
